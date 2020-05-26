@@ -2,6 +2,7 @@
 import asyncio
 import csv
 from datetime import datetime
+import io
 import logging
 import math
 import os
@@ -233,10 +234,14 @@ def listing_parser(listing_soup, location):
     return listing_dict
 
 
-def write_to_csv(dict):
-    with open("template.csv", "a") as f:
-        w = csv.DictWriter(f, dict.keys())
-        w.writerow(dict)
+def write_to_csv_in_buffer(dicts):
+    fieldnames = list(dicts[0].keys())
+    output_buffer = io.StringIO()
+    writer = csv.DictWriter(output_buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(dicts)
+
+    return output_buffer
 
 
 def scrape_landwatch(event, context):
@@ -285,14 +290,19 @@ def scrape_landwatch(event, context):
     soups = [first_page_soup]
     soups.extend(convert_resps_to_soups(page_htmls))
 
+    listings = []
     for soup in soups:
         listings_soup_list = soup.select("div.result")
         for listing_soup in listings_soup_list:
             listing_dict = listing_parser(listing_soup, location)
-            write_to_csv(listing_dict)
+            listings.append(listing_dict)
             counter += 1
 
-        print(f"{location['location']} complete\nTotal listings: {counter}")
+        print(
+            f"{location['location']} Part {soups.index(soup)} complete\nTotal listings: {counter}"
+        )
+
+    csv_in_buffer = write_to_csv_in_buffer(listings)
 
 
 if __name__ == "__main__":
