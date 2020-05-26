@@ -1,7 +1,7 @@
 # System libs
 import asyncio
 import csv
-from datetime import datetime
+from datetime import datetime, date
 import io
 import logging
 import math
@@ -9,6 +9,7 @@ import os
 import re
 
 # 3rd party
+import boto3
 from asyncio_pool import AioPool
 from bs4 import BeautifulSoup
 import httpx
@@ -244,6 +245,37 @@ def write_to_csv_in_buffer(dicts):
     return output_buffer
 
 
+def upload_csv_to_s3(*, in_mem_csv, location, BUCKET):
+    # Used this StackOverflow answer
+    # https://stackoverflow.com/questions/45699905/csv-file-upload-from-buffer-to-s3
+
+    today_str = str(date.today())
+    s3_csv_key = f"{today_str}-{location['location']}.csv"
+    csv_as_bytes = io.BytesIO(in_mem_csv.getvalue().encode())
+
+    # AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    # AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+
+    s3 = boto3.client(
+        "s3"  # ,
+        # aws_access_key_id=AWS_ACCESS_KEY_ID,
+        # aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=s3_csv_key,
+        Body=csv_as_bytes,
+        ContentType="text/csv",
+        ACL="public-read",
+    )
+
+    # Example finished AWS S3 URL
+    # https://giftsondemand.s3.amazonaws.com/2020-01-07/10_r.png
+    aws_url = f"https://{BUCKET}.s3.amazonaws.com/{s3_csv_key}"
+
+    return aws_url
+
+
 def scrape_landwatch(event, context):
     # Expect event to be something like:
     # {
@@ -303,10 +335,16 @@ def scrape_landwatch(event, context):
         )
 
     csv_in_buffer = write_to_csv_in_buffer(listings)
+    csv_url = upload_csv_to_s3(
+        in_mem_csv=csv_in_buffer, location=location, BUCKET=event["bucket"]
+    )
+
+    return csv_url
 
 
 if __name__ == "__main__":
     event = {
-        "starting_url": "https://www.landwatch.com/Oklahoma_land_for_sale/Osage_County/Land"
+        "starting_url": "https://www.landwatch.com/Oklahoma_land_for_sale/Osage_County/Land",
+        "bucket": "landtoolsai",
     }
-    scrape_landwatch(event, None)
+    print(scrape_landwatch(event, None))
