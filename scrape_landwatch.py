@@ -9,7 +9,6 @@ import os
 import re
 
 # 3rd party
-import boto3
 from asyncio_pool import AioPool
 from bs4 import BeautifulSoup
 import httpx
@@ -21,8 +20,6 @@ from tenacity import retry, stop_after_attempt
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 MAX_RETRIES_COUNT = 10
-SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
-SCRAPERAPI_URL = "http://api.scraperapi.com"
 
 
 def get_location(first_page_soup):
