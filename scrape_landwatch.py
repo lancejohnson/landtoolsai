@@ -2,13 +2,13 @@
 import asyncio
 import csv
 from datetime import datetime
+import logging
 import math
 import os
 import re
-from urllib.parse import quote
 
 # 3rd party
-import aiohttp
+from asyncio_pool import AioPool
 from bs4 import BeautifulSoup
 import httpx
 import requests
@@ -17,6 +17,8 @@ from tenacity import retry, stop_after_attempt
 # Local
 
 
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 MAX_RETRIES_COUNT = 10
 SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
 SCRAPERAPI_URL = "http://api.scraperapi.com"
@@ -60,40 +62,93 @@ def get_num_of_results(first_page_soup):
         return 1
 
 
-def gen_paginated_urls(first_page_soup, num_of_results, CON_LIMIT):
+def gen_paginated_urls(first_page_soup, num_of_results):
     paginated_urls = []
     if num_of_results > 15:
         num_of_pages = math.ceil(num_of_results / 15)
         pagination_base_url = first_page_soup.find("link", {"rel": "next"})["href"][:-1]
         for i in range(2, num_of_pages + 1):
             paginated_urls.append(f"{pagination_base_url}{i}")
-        paginated_urls = [
-            paginated_urls[i : i + CON_LIMIT]
-            for i in range(0, len(paginated_urls), CON_LIMIT)
-        ]
     return paginated_urls
 
 
-@retry(stop=stop_after_attempt(MAX_RETRIES_COUNT))
-async def fetch(url):
-    SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
-    SCRAPERAPI_URL = "http://api.scraperapi.com"
-    encoded_url = quote(url)
-    # Construct URL manually instead of using params because
-    # aiohttp seems to have a bug quoting the URL.
-    final_url = f"{SCRAPERAPI_URL}/?api_key={SCRAPER_API_KEY}&url={encoded_url}"
-    async with httpx.AsyncClient() as client:
-        r = await client.get(final_url)
-        return r.text
+async def fetch_urls(*, urls, con_limit, tag_check, dict_check, proxies):
+    """
+    :param proxies: Options are luminati, crawlera, scraperapi
+    """
+
+    @retry(stop=stop_after_attempt(MAX_RETRIES_COUNT))
+    async def fetch_url(url, retries=MAX_RETRIES_COUNT):
+        if proxies == "scraperapi":
+            SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY", "")
+            SCRAPERAPI_URL = "https://api.scraperapi.com"
+            params = {
+                "api_key": SCRAPER_API_KEY,
+                "url": url,
+            }
+            logging.info(f"Start page fetch for {url}")
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(SCRAPERAPI_URL, timeout=60, params=params)
+        elif proxies == "crawlera":
+            CRAWLERA_API_KEY = os.environ.get("crawleraAPIKey", "")
+
+            proxy = {
+                "http": f"http://{CRAWLERA_API_KEY}:@proxy.crawlera.com:8010/",
+                "https": f"http://{CRAWLERA_API_KEY}:@proxy.crawlera.com:8010/",
+            }
+
+            headers = {"X-Crawlera-Profile": "desktop"}
+            logging.info(f"Start page fetch for {url}")
+
+            async with httpx.AsyncClient(
+                headers=headers, proxies=proxy, verify=False
+            ) as client:
+                resp = await client.get(url, timeout=60)
+        elif proxies == "luminati":
+            LUMINATI_CUSTOMER_ID = os.environ.get("LUMINATI_CUSTOMER_ID", "")
+            LUMINATI_DEFAULT_ZONE = os.environ.get("LUMINATI_DEFAULT_ZONE", "")
+            LUMINATI_PASSWORD = os.environ.get("LUMINATI_PASSWORD", "")
+
+            proxy = {
+                "http": f"http://lum-customer-{LUMINATI_CUSTOMER_ID}-zone-{LUMINATI_DEFAULT_ZONE}-country-us:{LUMINATI_PASSWORD}@zproxy.lum-superproxy.io:22225",  # noqa:E501
+                "https": f"http://lum-customer-{LUMINATI_CUSTOMER_ID}-zone-{LUMINATI_DEFAULT_ZONE}-country-us:{LUMINATI_PASSWORD}@zproxy.lum-superproxy.io:22225",  # noqa:E501
+            }
+
+            headers = {
+                "Origin": "https://www.bing.com",
+                "Referer": "https://www.bing.com",
+                "Accept": "test/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",  # noqa:E501
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+            }
+            logging.info(f"Start page fetch for #{urls.index(url)} {url}")
+            async with httpx.AsyncClient(
+                headers=headers, proxies=proxy, verify=False
+            ) as client:
+                resp = await client.get(url, timeout=60)
+                logging.info(f"Response received for #{urls.index(url)} {url}")
+        test_soup = BeautifulSoup(resp.text, "html.parser")
+        if test_soup.find(tag_check, dict_check):
+            return resp.text
+        else:
+            print(
+                f"Soup test failed for #{urls.index(url)} {url}. {retries} retries remaining"
+            )
+            if retries > 0:
+                retries -= 1
+                raise ValueError(f"Soup test failed.  {retries} retries remaining")
+
+    pool = AioPool(size=con_limit)
+    page_htmls = await pool.map(fetch_url, urls)
+    return page_htmls
 
 
-async def get_serps_response(paginated_urls):
-    async with aiohttp.ClientSession():
-        soups = []
-        for serp_url_block in paginated_urls:
-            responses = await asyncio.gather(*[fetch(url) for url in serp_url_block])
-            soups.extend([BeautifulSoup(resp, "html.parser") for resp in responses])
-        return soups
+def convert_resps_to_soups(htmls):
+    soups = []
+    for html in htmls:
+        soups.extend([BeautifulSoup(html, "html.parser")])
+
+    return soups
 
 
 def listing_parser(listing_soup, county):
@@ -186,13 +241,13 @@ def write_to_csv(dict):
 def scrape_landwatch(event, context):
     # Expect event to be something like:
     # {
-    #     "starting_url": "https://www.landwatch.com/Wyoming_land_for_sale/Albany_County/Land"
+    #     "landwatch_url": "https://www.landwatch.com/Oklahoma_land_for_sale/Osage_County/Land"
     # }
 
     counter = 0
     CON_LIMIT = 10
 
-    county = {"landwatchurl": event["landwatch"]}
+    county = {"landwatchurl": event["starting_url"]}
     resp = requests.get(
         SCRAPERAPI_URL, {"api_key": SCRAPER_API_KEY, "url": county["landwatchurl"]}
     )
@@ -208,17 +263,30 @@ def scrape_landwatch(event, context):
     num_of_results = get_num_of_results(first_page_soup)
 
     print(f"{county['location']} Start - {num_of_results} listings")
-    paginated_url_blocks = gen_paginated_urls(
-        first_page_soup, num_of_results, CON_LIMIT
+    paginated_urls = gen_paginated_urls(first_page_soup, num_of_results)
+    page_htmls = asyncio.run(
+        fetch_urls(
+            urls=paginated_urls,
+            con_limit=CON_LIMIT,
+            tag_check="div",
+            dict_check={"class": "resultstitle"},
+            proxies="luminati",
+        )
     )
     soups = [first_page_soup]
-    soups.extend(asyncio.run(get_serps_response(paginated_url_blocks)))
+    soups.extend(convert_resps_to_soups(page_htmls))
     for soup in soups:
         listings_soup_list = soup.select("div.result")
         for listing_soup in listings_soup_list:
             listing_dict = listing_parser(listing_soup, county)
             write_to_csv(listing_dict)
-            # write_listing(listing_dict)
             counter += 1
 
         print(f"{county['location']} complete\nTotal listings: {counter}")
+
+
+if __name__ == "__main__":
+    event = {
+        "starting_url": "https://www.landwatch.com/Oklahoma_land_for_sale/Osage_County/Land"
+    }
+    scrape_landwatch(event, None)
