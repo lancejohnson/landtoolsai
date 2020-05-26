@@ -11,7 +11,6 @@ import re
 from asyncio_pool import AioPool
 from bs4 import BeautifulSoup
 import httpx
-import requests
 from tenacity import retry, stop_after_attempt
 
 # Local
@@ -248,10 +247,17 @@ def scrape_landwatch(event, context):
     CON_LIMIT = 10
 
     county = {"landwatchurl": event["starting_url"]}
-    resp = requests.get(
-        SCRAPERAPI_URL, {"api_key": SCRAPER_API_KEY, "url": county["landwatchurl"]}
+    resp_texts = asyncio.run(
+        fetch_urls(
+            urls=[county["landwatchurl"]],
+            con_limit=CON_LIMIT,
+            tag_check="div",
+            dict_check={"class": "resultstitle"},
+            proxies="luminati",
+        )
     )
-    first_page_soup = BeautifulSoup(resp.content, "html.parser")
+    selected_resp = resp_texts[0]
+    first_page_soup = BeautifulSoup(selected_resp, "html.parser")
     county["location"] = get_location(first_page_soup)
 
     # Expect county to be something like:
