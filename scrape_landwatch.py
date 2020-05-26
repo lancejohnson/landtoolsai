@@ -150,7 +150,7 @@ def convert_resps_to_soups(htmls):
     return soups
 
 
-def listing_parser(listing_soup, county):
+def listing_parser(listing_soup, location):
     """This takes the soup for an individual property listing and transforms
     it into the following schema
     """
@@ -176,6 +176,7 @@ def listing_parser(listing_soup, county):
     )
     listing_dict["pid"] = int(listing_dict["listing_url"].split("/")[-1])
     try:
+        # import pdb; pdb.set_trace()
         acre_soup = listing_soup.find(text=re.compile(r"Acre"))
         if acre_soup:
             acres = float(acre_soup.split("Acre")[0])
@@ -204,7 +205,7 @@ def listing_parser(listing_soup, county):
             description.text.strip() if description else "DescNotPresent"
         )
 
-        listing_dict["county"] = county["county"]
+        listing_dict["location"] = location["location"]
 
         office_name = listing_soup.find("a", {"class": "officename"})
         listing_dict["office_name"] = (
@@ -226,7 +227,8 @@ def listing_parser(listing_soup, county):
         )
 
         listing_dict["date_first_seen"] = datetime.now().date()
-    except Exception:
+    except Exception as e:
+        logging.ERROR(f"Error is {e}")
         listing_dict["acres"] = "Error"
     return listing_dict
 
@@ -246,10 +248,10 @@ def scrape_landwatch(event, context):
     counter = 0
     CON_LIMIT = 10
 
-    county = {"landwatchurl": event["starting_url"]}
+    location = {"landwatchurl": event["starting_url"]}
     resp_texts = asyncio.run(
         fetch_urls(
-            urls=[county["landwatchurl"]],
+            urls=[location["landwatchurl"]],
             con_limit=CON_LIMIT,
             tag_check="div",
             dict_check={"class": "resultstitle"},
@@ -258,18 +260,19 @@ def scrape_landwatch(event, context):
     )
     selected_resp = resp_texts[0]
     first_page_soup = BeautifulSoup(selected_resp, "html.parser")
-    county["location"] = get_location(first_page_soup)
+    location["location"] = get_location(first_page_soup)
 
-    # Expect county to be something like:
-    # county = {
+    # Expect location to be something like:
+    # location = {
     #     "landwatchurl": "https://www.landwatch.com/Oklahoma_land_for_sale/Osage_County/Land",
     #     "location": "Osage_County-OK",
     # }
 
     num_of_results = get_num_of_results(first_page_soup)
 
-    print(f"{county['location']} Start - {num_of_results} listings")
+    print(f"{location['location']} Start - {num_of_results} listings")
     paginated_urls = gen_paginated_urls(first_page_soup, num_of_results)
+
     page_htmls = asyncio.run(
         fetch_urls(
             urls=paginated_urls,
@@ -281,14 +284,15 @@ def scrape_landwatch(event, context):
     )
     soups = [first_page_soup]
     soups.extend(convert_resps_to_soups(page_htmls))
+
     for soup in soups:
         listings_soup_list = soup.select("div.result")
         for listing_soup in listings_soup_list:
-            listing_dict = listing_parser(listing_soup, county)
+            listing_dict = listing_parser(listing_soup, location)
             write_to_csv(listing_dict)
             counter += 1
 
-        print(f"{county['location']} complete\nTotal listings: {counter}")
+        print(f"{location['location']} complete\nTotal listings: {counter}")
 
 
 if __name__ == "__main__":
