@@ -10,6 +10,7 @@ import re
 
 # 3rd party
 from asyncio_pool import AioPool
+import boto3
 from bs4 import BeautifulSoup
 import httpx
 from tenacity import retry, stop_after_attempt
