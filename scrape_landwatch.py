@@ -165,7 +165,6 @@ def listing_parser(listing_soup, location):
         "office_name": "First United Realty, Inc.",
         "office_url": "https://www.landwatch.com/default.aspx?ct=r&type=146,157956",  # noqa: E501
         "office_status": "Signature Partner",
-        "date_first_seen": "Oct 26, 2019",
         "price_per_acre": 17500.00,  # this field is calculated
     }
 
@@ -225,8 +224,6 @@ def listing_parser(listing_soup, location):
             if office_status
             else "OfficeStatusBlank"
         )
-
-        listing_dict["date_first_seen"] = datetime.now().date()
     except Exception as e:
         logging.ERROR(f"Error is {e}")
         listing_dict["acres"] = "Error"
