@@ -53,8 +53,10 @@ provider:
 #            - "/*"
 
 # you can define service wide environment variables here
-#  environment:
-#    variable1: value1
+environment:
+  LUMINATI_CUSTOMER_ID: ${env:LUMINATI_CUSTOMER_ID}
+  LUMINATI_DEFAULT_ZONE: ${env:LUMINATI_DEFAULT_ZONE}
+  LUMINATI_PASSWORD: ${env:LUMINATI_PASSWORD}
 
 # you can add packaging information here
 #package:
@@ -122,3 +124,4 @@ functions:
 
 plugins:
   - serverless-python-requirements
+  - serverless-dotenv-plugin
